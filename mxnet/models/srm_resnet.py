@@ -1,56 +1,45 @@
 #Cnnot Use net.hybridize()
-__all__ = ['sge_resnet18', 'sge_resnet34', 'sge_resnet50', 'sge_resnet101', 'sge_resnet152']
+__all__ = ['srm_resnet18', 'srm_resnet34', 'srm_resnet50', 'srm_resnet101', 'srm_resnet152']
 
-import os
 import mxnet as mx
-from mxnet import cpu
-from mxnet.gluon import nn, HybridBlock, Parameter
+from mxnet.gluon import nn
+from mxnet.gluon.nn import HybridBlock, HybridSequential
 
+class SRMLayer(HybridBlock):
+    def __init__(self, channel, reduction=None):
+        # Reduction for compatibility with layer_block interface
+        super(SRMLayer, self).__init__()
 
-class SpatialGroupEnhance(HybridBlock):
-    def __init__(self, groups = 64):
-        super(SpatialGroupEnhance, self).__init__()
-        self.groups   = groups
+        # CFC: channel-wise fully connected layer
+        self.cfc = nn.Conv1D(channel, in_channels=channel, kernel_size=2, use_bias=False, groups=channel)
+        self.bn = nn.BatchNorm(in_channels=channel, momentum=0.1)
+
+    def hybrid_forward(self, F, x):
+        b, c, h, w = x.shape
+
+        # Style pooling
+        mean, std = F.moments(x.reshape(b,c,h*w), axes=-1)
+        mean = F.expand_dims(mean, axis=-1)
+        std = F.expand_dims(std, axis=-1)
         
-        self.weight = self.params.get('weight', shape=(1, groups, 1, 1), init='zero')
-        self.bias = self.params.get('bias', shape=(1, groups, 1, 1), init='ones')
-        self.sig = nn.Activation('sigmoid')
-        self.layer_shape = None
-    
-    def forward(self, x):
-        self.layer_shape = x.shape
-        return HybridBlock.forward(self,x) 
+        u = F.concat(mean, std, dim=-1)# (b, c, 2)
+         
+        # Style integration
+        z = self.cfc(u)  # (b, c, 1)
+        z = self.bn(z)
+        g = F.sigmoid(z)
+        g = g.reshape(b, c, 1, 1)
 
-    def hybrid_forward(self, F, x, weight, bias): # (b, c, h, w)
-        
-        b, c, h, w = self.layer_shape
-        x = F.Reshape(x, shape=(b*self.groups, -1, h, w))
-        xn = F.broadcast_mul(x, F.contrib.AdaptiveAvgPooling2D(x, output_size=1))
-        xn = xn.sum(axis=1, keepdims=True)
-        t = F.Reshape(xn, shape=(b * self.groups, -1))
-        mean, std = F.op.moments(t, axes=1, keepdims=True)
-        t = F.broadcast_minus(t, mean)
-        #t = F.broadcast_minus(t, t.mean(axis=1, keepdims=True))
-        #_, std = F.op.moments(t, axes=1, keepdims=True)
-        t = F.broadcast_div(t, F.sqrt(std)+1e-5)
-        t = F.Reshape(t, shape=(b, self.groups, h, w))
-        t = F.broadcast_add(F.broadcast_mul(t, weight), bias)
-        t = F.Reshape(t, shape=(b * self.groups, 1, h, w))
-        x = F.broadcast_mul(x, self.sig(t))
-        x = F.Reshape(x, shape=(b, c, h, w))
-        return x
-
+        return F.broadcast_mul(g, x)
 
 def conv3x3(in_planes, out_planes, stride=1):
-    """3x3 convolution with padding"""
     return nn.Conv2D(out_planes, in_channels=in_planes, kernel_size=3, strides=stride,
                      padding=1, use_bias=False)
 
 
 def conv1x1(in_planes, out_planes, stride=1):
-    """1x1 convolution"""
-    return nn.Conv2D(out_planes, in_channels=in_planes, kernel_size=1, strides=stride, use_bias=False)
-
+    return nn.Conv2D(out_planes, in_channels=in_planes, kernel_size=1, strides=stride,
+                     use_bias=False)
 
 class BasicBlock(HybridBlock):
     expansion = 1
@@ -62,14 +51,11 @@ class BasicBlock(HybridBlock):
         self.relu = nn.Activation('relu')
         self.conv2 = conv3x3(planes, planes)
         self.bn2 = nn.BatchNorm(in_channels=planes, momentum=0.1)
-        self.downsample = downsample
+        self.layer_block = layer_block
         self.stride = stride
-        self.sge = SpatialGroupEnhance(64)
-        self.layer_shape = None
-
-    def forward(self, x):
-        self.layer_shape = x.shape
-        return HybridBlock.forward(self,x)
+        self.downsample = downsample
+        
+        self.layer_block = SRMLayer(planes, reduction=16)
 
     def hybrid_forward(self, F, x):
         identity = x
@@ -80,7 +66,7 @@ class BasicBlock(HybridBlock):
 
         out = self.conv2(out)
         out = self.bn2(out)
-        out = self.sge(out)
+        out = self.layer_block(out)
 
         if self.downsample is not None:
             identity = self.downsample(x)
@@ -104,12 +90,7 @@ class Bottleneck(HybridBlock):
         self.relu = nn.Activation('relu')
         self.downsample = downsample
         self.stride = stride
-        self.sge = SpatialGroupEnhance(64)
-        self.layer_shape = None
-
-    def forward(self, x):
-        self.layer_shape = x.shape
-        return HybridBlock.forward(self,x)
+        self.layer_block = SRMLayer(planes, reduction=16)
 
     def hybrid_forward(self, F, x):
         identity = x
@@ -124,7 +105,7 @@ class Bottleneck(HybridBlock):
 
         out = self.conv3(out)
         out = self.bn3(out)
-        out = self.sge(out)
+        out = self.layer_block(out)
 
         if self.downsample is not None:
             identity = self.downsample(x)
@@ -134,9 +115,12 @@ class Bottleneck(HybridBlock):
 
         return out
 
+
+
+
 class ResNet(HybridBlock):
 
-    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False):
+    def __init__(self, block, layers, num_classes=1000):
         super(ResNet, self).__init__()
         self.inplanes = 64
         self.conv1 = nn.Conv2D(64, in_channels=3, kernel_size=7, strides=2, padding=3,
@@ -150,31 +134,7 @@ class ResNet(HybridBlock):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
         self.avgpool = nn.GlobalAvgPool2D()
         self.fc = nn.Dense(num_classes, in_units=512 * block.expansion)
-        self.layer_shape = None
-
-    def _initialize(self, force_reinit=True, ctx=mx.cpu()):
-        for k, v in self.collect_params().items():
-            if 'conv' in k:
-                if 'weight' in k:
-                    v.initialize(mx.init.Normal(0.01), force_reinit=force_reinit, ctx=ctx)
-                if 'bias' in k:
-                    v.initialize(mx.init.Constant(0), force_reinit=force_reinit, ctx=ctx)
-            elif 'batchnorm' in k:
-                if 'gamma' in k:
-                    v.initialize(mx.init.Constant(1), force_reinit=force_reinit, ctx=ctx)
-                if 'beta' in k:
-                    v.initialize(mx.init.Constant(0.0001), force_reinit=force_reinit, ctx=ctx)
-                if 'running' in k or 'moving' in k:
-                    v.initialize(mx.init.Constant(0), force_reinit=force_reinit, ctx=ctx)
-            elif 'dense' in k:
-                v.initialize(mx.init.Normal(0.01), force_reinit=force_reinit, ctx=ctx)
-                if 'bias' in k:
-                    v.initialize(mx.init.Constant(0), force_reinit=force_reinit, ctx=ctx)
-            
-
-    def forward(self, x):
-        self.layer_shape = x.shape
-        return HybridBlock.forward(self,x)
+        
 
 
     def _make_layer(self, block, planes, blocks, stride=1):
@@ -215,7 +175,7 @@ class ResNet(HybridBlock):
         return x
 
 
-def sge_resnet18(pretrained=False, **kwargs):
+def srm_resnet18(pretrained=False, **kwargs):
     """Constructs a ResNet-18 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
@@ -224,7 +184,7 @@ def sge_resnet18(pretrained=False, **kwargs):
     return model
 
 
-def sge_resnet34(pretrained=False, **kwargs):
+def srm_resnet34(pretrained=False, **kwargs):
     """Constructs a ResNet-34 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
@@ -233,7 +193,7 @@ def sge_resnet34(pretrained=False, **kwargs):
     return model
 
 
-def sge_resnet50(pretrained=False, **kwargs):
+def srm_resnet50(pretrained=False, **kwargs):
     """Constructs a ResNet-50 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
@@ -242,7 +202,7 @@ def sge_resnet50(pretrained=False, **kwargs):
     return model
 
 
-def sge_resnet101(pretrained=False, **kwargs):
+def srm_resnet101(pretrained=False, **kwargs):
     """Constructs a ResNet-101 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
@@ -251,11 +211,10 @@ def sge_resnet101(pretrained=False, **kwargs):
     return model
 
 
-def sge_resnet152(pretrained=False, **kwargs):
+def srm_resnet152(pretrained=False, **kwargs):
     """Constructs a ResNet-152 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
     model = ResNet(Bottleneck, [3, 8, 36, 3], **kwargs)
     return model
-

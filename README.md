@@ -20,13 +20,13 @@
 
 ![sk](image/SK.png)
 
+## [SRM](https://arxiv.org/pdf/1903.10829.pdf)
 
+![srm](image/SRM.png)
 
 ## Other Papers：
 
 [GCNet: GCNet: Non-local Networks Meet Squeeze-Excitation Networks and Beyond](https://arxiv.org/pdf/1904.11492.pdf), [code](https://github.com/xvjiarui/GCNet)
-
-[SRMNet: SRM: A Style-based Recalibration Module for Convolutional Neural Networks](https://arxiv.org/pdf/1903.10829.pdf), [code](https://github.com/EvgenyKashin/SRMnet)
 
 [Attention Is All You Need](https://arxiv.org/abs/1706.03762)  
 
@@ -42,3 +42,5 @@ https://github.com/hekesai/CV_attention
 https://gluon-cv.mxnet.io/model_zoo/classification.html
 
 https://github.com/osmr/imgclsmob
+
+https://github.com/EvgenyKashin/SRMnet

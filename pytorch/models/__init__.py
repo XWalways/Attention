@@ -6,3 +6,4 @@ from .cbam_resnet import *
 from .bam_resnet import *
 from .sge_resnet import *
 from .ws_resnet import *
+from .srm_resnet import *
