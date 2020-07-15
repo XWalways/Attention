@@ -1,7 +1,120 @@
 import os
+from pathlib import Path
+import requests
+import errno
+import shutil
+import hashlib
+import zipfile
+import logging
+from tqdm import tqdm
 from inspect import isfunction
 import mxnet as mx
 from mxnet.gluon import nn, HybridBlock
+
+logger = logging.getLogger(__name__)
+
+_model_sha1 = {name: checksum for checksum, name in [
+    ('bcfefe1dd1dd1ef5cfed5563123c1490ea37b42e', 'resnest50'),
+    ('5da943b3230f071525a98639945a6b3b3a45ac95', 'resnest101'),
+    ('0c5d117df664ace220aa6fc2922c094bb079d381', 'resnest200'),
+    ('11ae7f5da2bcdbad05ba7e84f9b74383e717f3e3', 'resnest269'),]}
+
+encoding_repo_url = 'https://s3.us-west-1.wasabisys.com/resnest/'
+_url_format = '{repo_url}gluon/{file_name}.zip'
+
+def short_hash(name):
+    if name not in _model_sha1:
+        raise ValueError('Pretrained model for {name} is not available.'.format(name=name))
+    return _model_sha1[name][:8]
+
+def get_model_file(name, root=os.path.join('~', '.encoding', 'models')):
+    if name not in _model_sha1:
+        import gluoncv as gcv
+        return gcv.model_zoo.model_store.get_model_file(name, root=root)
+    file_name = '{name}-{short_hash}'.format(name=name, short_hash=short_hash(name))
+    root = os.path.expanduser(root)
+    file_path = os.path.join(root, file_name+'.params')
+    sha1_hash = _model_sha1[name]
+    if os.path.exists(file_path):
+        if check_sha1(file_path, sha1_hash):
+            return file_path
+        else:
+            print('Mismatch in the content of model file {} detected.' +
+                  ' Downloading again.'.format(file_path))
+    else:
+        print('Model file {} is not found. Downloading.'.format(file_path))
+
+    if not os.path.exists(root):
+        os.makedirs(root)
+
+    zip_file_path = os.path.join(root, file_name+'.zip')
+    repo_url = os.environ.get('ENCODING_REPO', encoding_repo_url)
+    if repo_url[-1] != '/':
+        repo_url = repo_url + '/'
+    download(_url_format.format(repo_url=repo_url, file_name=file_name),
+             path=zip_file_path,
+             overwrite=True)
+    with zipfile.ZipFile(zip_file_path) as zf:
+        zf.extractall(root)
+    os.remove(zip_file_path)
+
+    if check_sha1(file_path, sha1_hash):
+        return file_path
+    else:
+        raise ValueError('Downloaded file has different hash. Please try again.')
+
+
+def download(url, path=None, overwrite=False, sha1_hash=None):
+    if path is None:
+        fname = url.split('/')[-1]
+    else:
+        path = os.path.expanduser(path)
+        if os.path.isdir(path):
+            fname = os.path.join(path, url.split('/')[-1])
+        else:
+            fname = path
+
+    if overwrite or not os.path.exists(fname) or (sha1_hash and not check_sha1(fname, sha1_hash)):
+        dirname = os.path.dirname(os.path.abspath(os.path.expanduser(fname)))
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
+
+        logger.info('Downloading %s from %s...'%(fname, url))
+        r = requests.get(url, stream=True)
+        if r.status_code != 200:
+            raise RuntimeError("Failed downloading url %s"%url)
+        total_length = r.headers.get('content-length')
+        with open(fname, 'wb') as f:
+            if total_length is None: # no content length header
+                for chunk in r.iter_content(chunk_size=1024):
+                    if chunk: # filter out keep-alive new chunks
+                        f.write(chunk)
+            else:
+                total_length = int(total_length)
+                for chunk in tqdm(r.iter_content(chunk_size=1024),
+                                  total=int(total_length / 1024. + 0.5),
+                                  unit='KB', unit_scale=False, dynamic_ncols=True):
+                    f.write(chunk)
+
+        if sha1_hash and not check_sha1(fname, sha1_hash):
+            raise UserWarning('File {} is downloaded but the content hash does not match. ' \
+                              'The repo may be outdated or download may be incomplete. ' \
+                              'If the "repo_url" is overridden, consider switching to ' \
+                              'the default repo.'.format(fname))
+
+    return fname
+
+
+def check_sha1(filename, sha1_hash):
+    sha1 = hashlib.sha1()
+    with open(filename, 'rb') as f:
+        while True:
+            data = f.read(1048576)
+            if not data:
+                break
+            sha1.update(data)
+
+    return sha1.hexdigest() == sha1_hash
 
 def conv1x1(in_channels,
             out_channels,
