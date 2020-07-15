@@ -24,6 +24,12 @@
 
 ![srm](image/SRM.png)
 
+## [ResNeSt](https://arxiv.org/pdf/2004.08955.pdf)
+
+![resnest](image/resnest.png)
+
+![split_attention](image/split_attention.png)
+
 ## Other Papers：
 
 [GCNet: GCNet: Non-local Networks Meet Squeeze-Excitation Networks and Beyond](https://arxiv.org/pdf/1904.11492.pdf), [code](https://github.com/xvjiarui/GCNet)
@@ -44,3 +50,9 @@ https://gluon-cv.mxnet.io/model_zoo/classification.html
 https://github.com/osmr/imgclsmob
 
 https://github.com/EvgenyKashin/SRMnet
+
+https://github.com/zhanghang1989/Fast-AutoAug-Torch
+
+https://github.com/zhanghang1989/PyTorch-Encoding
+
+https://github.com/zhanghang1989/RFConv

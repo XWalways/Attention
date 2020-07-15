@@ -12,6 +12,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import Conv2d, Module, Linear, BatchNorm2d, ReLU
 from torch.nn.modules.utils import _pair
+'''
+Use Rectified Convolution
+Requirements:
+torch=1.4.0 + ninja=1.8.2(https://hangzhang.org/PyTorch-Encoding/notes/compile.html#detailed-steps)
+pip install rfconv
+import rfconv
+from rfconv import RFConv2d
+or 
+pip install install torch-encoding --pre
+import encoding
+from encoding.nn import RFConv2d
+'''
+import rfconv
 
 __all__ = ['resnest50', 'resnest101', 'resnest200', 'resnest269', 'reset_dropblock']
 
@@ -137,7 +150,10 @@ class SplAtConv2d(Module):
         self.cardinality = groups
         self.channels = channels
         self.dropblock_prob = dropblock_prob
-        if not self.rectify:
+        if self.rectify:
+            self.conv = rfconv.RFConv2d(in_channels, channels*radix, kernel_size, stride, padding, dilation,
+                                 groups=groups*radix, bias=bias, average_mode=rectify_avg, **kwargs)
+        else:
             self.conv = Conv2d(in_channels, channels*radix, kernel_size, stride, padding, dilation,
                                groups=groups*radix, bias=bias, **kwargs)
         self.use_bn = norm_layer is not None
@@ -241,7 +257,14 @@ class Bottleneck(nn.Module):
                 rectify_avg=rectify_avg,
                 norm_layer=norm_layer,
                 dropblock_prob=dropblock_prob)
-        elif not rectified_conv:
+        elif rectified_conv:
+            self.conv2 = rfconv.RFConv2d(
+                group_width, group_width, kernel_size=3, stride=stride,
+                padding=dilation, dilation=dilation,
+                groups=cardinality, bias=False,
+                average_mode=rectify_avg)
+            self.bn2 = norm_layer(group_width)
+        else:
             self.conv2 = nn.Conv2d(
                 group_width, group_width, kernel_size=3, stride=stride,
                 padding=dilation, dilation=dilation,
@@ -317,7 +340,9 @@ class ResNet(nn.Module):
         super(ResNet, self).__init__()
         self.rectified_conv = rectified_conv
         self.rectify_avg = rectify_avg
-        if not rectified_conv:
+        if rectified_conv:
+            conv_layer = rfconv.RFConv2d
+        else:
             conv_layer = nn.Conv2d
         conv_kwargs = {'average_mode': rectify_avg} if rectified_conv else {}
         if deep_stem:
