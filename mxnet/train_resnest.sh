@@ -1,7 +1,7 @@
 #HOROVOD_GPU_ALLREDUCE=NCCL pip install -v --no-cache-dir horovod
 #pip install --no-cache mpi4py
 
-horovodrun -np 64 --hostfile hosts python train.py \
+horovodrun -np 64 --hostfile hosts python train_resnest.py \
 --rec-train /media/ramdisk/ILSVRC2012/train.rec \
 --rec-val /media/ramdisk/ILSVRC2012/val.rec \
 --model resnest50 --lr 0.05 --num-epochs 270 --batch-size 128 \
