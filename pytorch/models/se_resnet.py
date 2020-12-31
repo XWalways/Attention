@@ -14,21 +14,26 @@ class SELayer(nn.Module):
     def __init__(self, channel, reduction = 16, fc=True):
         super(SELayer, self).__init__()
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        if fc:
-            self.fc = nn.Sequential(nn.Linear(channel, channel // reduction),
+        self.fc = fc
+        if self.fc:
+            self.fc = nn.Sequential(nn.Linear(channel, channel // reduction, bias=False),
                                     nn.ReLU(inplace = True),
-                                    nn.Linear(channel // reduction, channel),
+                                    nn.Linear(channel // reduction, channel, bias=False),
                                     nn.Sigmoid())
         else:
-            self.fc = nn.Sequential(nn.Conv2d(channel, channel // reduction, kernel_size=1, stride=1),
-                                    nn.Linear(channel // reduction, channel, kernel_size=1, stride=1),
+            self.fc = nn.Sequential(nn.Conv2d(channel, channel // reduction, kernel_size=1, stride=1, bias=True),
                                     nn.ReLU(inplace = True),
+                                    nn.Conv2d(channel // reduction, channel, kernel_size=1, stride=1, bias=True),
                                     nn.Sigmoid())
 
     def forward(self, x):
         b, c, _, _ = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1, 1)
+        if self.fc == True:
+            y = self.avg_pool(x).view(b, c) #BxC
+            y = self.fc(y).view(b, c, 1, 1)
+        if self.fc == False:
+            y = self.avg_pool(x) #BxCx1x1
+            y = self.fc(y).view(b, c, 1, 1)
         return x * y
 
 def conv3x3(in_planes, out_planes, stride=1):
